@@ -2,92 +2,84 @@
 var nodeStatic = require('node-static').Server;
 var request = require("request");
 var dns = require("dns");
-var fileServer = new nodeStatic("../");
 var http = require("http");
+var path = require('path');
 var fs = require('fs');
-
-var httpServer = http.createServer(function(req, res) {
-
-      req.addListener('end', function() {
-
-	var url = 'http://' + req.headers.host + req.url;
-	var host = req.headers.host;
-
-	console.log('request: ' + url);
-	try {
-	  var paths = getPaths();
-	  var path = paths[url]; 
-	  if (path) {
-	    var content = loadPath(path);
-	    if (content) {
-	      console.log('local file:' + path);
-	      res.writeHeader(200, 'application/x-javascript');
-	      res.write(content);
-	      res.end();
-	    }
-	  }
-	} catch(e) {
-	  console.log('local file error:' + path);
-	  //console.log(e);
-	}
-
-
-        fileServer.serve(req, res, function(err, result) {
-            if (err && (err.status === 404)) {
-            //本地没有文件访问线上，透明server
-	    /*console.log(host)
-            dns.resolve(host ,function(err,addresses){
-	      try {
-                if(err){
-                    res.writeHeader(200,'text/html');   
-                    res.write(req.url + ' request failure');
-                    res.end();
-                 }else{
-		 */
-                    //var ip = addresses[0];
-                    var p = 'http://' + host + req.url;
-                    req.headers['Host'] = host;
-
-		    if (/longzhu\.com/.exec(host)) {
-		      if (/star\./.exec(host) || /u\.longzhu/.exec(host)
-			|| (/mb\./).exec(host)) {
-			p = 'http://127.0.0.1:1343' + req.url;
-			//p = 'http://172.16.9.9' + req.url;
-		      } else {
-			p = 'http://127.0.0.1:1343' + req.url;
-			//p = 'http://' + host + ':81' + req.url;
-		      }
-		    }
-		    console.log(p);
-
-		    try {
-                    request({
-                        method:req.method,
-                        url: p,
-                        headers:req.headers
-                    }).pipe(res);
-		    } catch(e) {}
-              /*    } 
-	      } catch(e) {
-		console.log('proxy error:' + e);
-	      }
-            });*/
-            }
-        });
-    }).resume();
-});
+var config = require('./config-default');
 
 try {
-  httpServer.listen(80);
-} catch(e) {
-  console.log(e);
+  config = require('./config');
+} catch(e) {}
+
+var paths;
+
+loadPaths();
+
+fs.watchFile(config.paths, function(curr, prev) {
+  loadPaths();  
+});
+
+var fileServer = new nodeStatic(config.root);
+var httpServer = http.createServer(handleRequest);
+httpServer.listen(config.port, config.ip);
+console.log('listen on ' + config.ip + ':' + config.port);
+
+/**
+ * server监听函数
+ */
+function handleRequest(req, res) {
+  req.addListener('end', function() {
+    var url = 'http://' + req.headers.host + req.url;
+    try {
+      var file = paths[url]; 
+      if (file) {
+	var content = loadPath(file);
+	if (content) {
+	  res.writeHeader(200, 'application/x-javascript');
+	  res.write(content);
+	  res.end();
+	  console.log(url);
+	  console.log(' --> ' + file);
+	}
+      }
+    } catch(e) {
+      console.log('load failure: ' + file);
+    }
+
+    fileServer.serve(req, res, function(err, result) {
+      if (err && (err.status === 404)) {
+	//本地没有文件访问线上，透明server
+	dns.resolve4(req.headers.host,function(err,addresses){
+	  try {
+	    if(err){
+	      res.writeHeader(200,'text/html');   
+	      res.write(req.url);
+	      res.end(err);
+	    }else{
+	      var ip = addresses[0];
+	      var p = 'http://' + ip + req.url;
+	      req.headers['Host'] = req.headers.host;
+	      request({
+		method:req.method,
+		url: p,
+		headers:req.headers
+	      }).pipe(res);
+	    } 
+	  } catch(e) {}
+	});
+      }
+    });
+  }).resume();
 }
 
-console.log('listen on 127.0.0.1:80');
-
-function getPaths() {
-  var content = fs.readFileSync('./paths.json');
-  return JSON.parse(content);
+function loadPaths() {
+  delete require.cache[path.resolve(config.paths)];
+  try {
+    paths = require(config.paths);
+    console.log('load ' + config.paths + ' success.');
+  } catch(e) {
+    console.log('load ' + config.paths + ' failure.');
+  }
 }
 
 function loadPath(path) {
